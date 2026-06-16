@@ -1,0 +1,6 @@
+-r requirements.txt
+
+boto3>=1.34            # local DynamoDB access (already present in Lambda)
+python-dotenv>=1.0    # load .env on local runs
+pytest>=8.0
+ruff>=0.6

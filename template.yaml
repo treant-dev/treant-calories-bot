@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Calorie-tracking Telegram bot — infrastructure as code: three DynamoDB
+  tables, the webhook Lambda, and a throttled API Gateway. Cost is capped by
+  Lambda reserved concurrency and API Gateway throttling. (EventBridge warm-up
+  ping to be added later.)
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 256
+    Architectures:
+      - arm64   # Graviton: cheaper, and builds natively on Apple Silicon
+
+Resources:
+
+  # ── Webhook Lambda ──────────────────────────────────────────────
+  CalorieBotFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: app/
+      Handler: handler.lambda_handler
+      # NOTE: no ReservedConcurrentExecutions — a new account's total Lambda
+      # concurrency is only 10, and AWS won't let unreserved drop below 10, so
+      # reserving any is rejected. The account-wide limit of 10 is itself the
+      # cap; API Gateway throttling (below) is the primary cost guard. Revisit
+      # once the account concurrency limit is raised via Service Quotas.
+      Environment:
+        Variables:
+          # Non-secret config only. Secrets (ANTHROPIC_API_KEY,
+          # TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET, service account JSON)
+          # are SecureString params under SSM_PREFIX, read at cold start.
+          SSM_PREFIX: /calorie-bot
+          USER_PROFILE_TABLE: !Ref UserProfileTable
+          USER_STATES_TABLE: !Ref UserStatesTable
+          USER_FOODS_TABLE: !Ref UserFoodsTable
+          ANTHROPIC_MODEL: claude-sonnet-4-6
+          LOG_LEVEL: INFO
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UserProfileTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UserStatesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UserFoodsTable
+        - SSMParameterReadPolicy:
+            ParameterName: calorie-bot/*
+      Events:
+        Webhook:
+          Type: Api
+          Properties:
+            RestApiId: !Ref WebhookApi
+            Path: /webhook
+            Method: post
+
+  # ── API Gateway (throttled) ─────────────────────────────────────
+  WebhookApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      MethodSettings:
+        - ResourcePath: /*
+          HttpMethod: '*'
+          # Cost guard: steady-state 5 req/s, burst up to 10. Plenty for a
+          # single Telegram webhook; blocks request floods from billing through.
+          ThrottlingRateLimit: 5
+          ThrottlingBurstLimit: 10
+
+  # ── DynamoDB tables ─────────────────────────────────────────────
+
+  # Per-user record: linked sheet + config (timezone, daily_calorie_goal),
+  # plus per-day meal counters, rate-limit window, and the conversation buffer.
+  UserProfileTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain          # keep user data if the stack is deleted
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: calorie_bot_user_profile
+      BillingMode: PAY_PER_REQUEST  # On-demand
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+
+  # Transient dialog state while the bot waits for a clarification answer.
+  # Rows self-expire via TTL (the app writes `ttl` = now + 3600 seconds).
+  UserStatesTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: calorie_bot_user_states
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+      TimeToLiveSpecification:       # enables TTL automatically — no console step
+        AttributeName: ttl
+        Enabled: true
+
+  # Per-user database of known foods (macros per 100 g) for reuse.
+  UserFoodsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: calorie_bot_user_foods
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: S
+        - AttributeName: food_name
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+        - AttributeName: food_name
+          KeyType: RANGE
+
+Outputs:
+  WebhookUrl:
+    Description: Set this as the Telegram webhook URL (POST)
+    Value: !Sub https://${WebhookApi}.execute-api.${AWS::Region}.amazonaws.com/prod/webhook
+  UserProfileTableName:
+    Description: Name of the user_profile table
+    Value: !Ref UserProfileTable
+  UserStatesTableName:
+    Description: Name of the user_states table
+    Value: !Ref UserStatesTable
+  UserFoodsTableName:
+    Description: Name of the user_foods table
+    Value: !Ref UserFoodsTable

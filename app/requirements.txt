@@ -1,0 +1,8 @@
+# Lambda runtime dependencies — installed into the deployment package by `sam build`.
+# Keep in sync with the runtime deps in ../requirements.txt.
+# boto3 is provided by the Lambda runtime, so it is NOT listed here.
+anthropic>=0.40,<1.0
+httpx>=0.27,<1.0
+google-auth>=2.30,<3.0
+requests>=2.31,<3.0   # used by google-auth's Request transport to mint the token
+tzdata               # IANA timezone data, so zoneinfo works in the Lambda sandbox
