@@ -4,5 +4,6 @@ httpx>=0.27,<1.0             # lightweight HTTP calls to the Google Sheets API
 google-auth>=2.30,<3.0       # mint OAuth2 token for the service account (lighter than google-api-python-client)
 requests>=2.31,<3.0          # used by google-auth's Request transport
 tzdata                        # IANA timezone data for zoneinfo
+Pillow>=10,<12                # downscale food photos before sending to Claude (cuts image tokens)
 
 # boto3 ships with the Lambda runtime — installed locally via requirements-dev.txt

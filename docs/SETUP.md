@@ -23,7 +23,7 @@ full spec.
 
 - [ ] Create the bot via [@BotFather](https://t.me/BotFather) → `/newbot` → get `TELEGRAM_BOT_TOKEN`
 - [ ] Generate a webhook secret: `python -c "import secrets; print(secrets.token_urlsafe(32))"` → `TELEGRAM_WEBHOOK_SECRET`
-- [ ] (Later) Register commands with BotFather: `/start`, `/tz`, `/goal`, `/calc`, `/today`, `/undo`, `/stats`, `/remember`
+- [ ] (Later) Register commands with BotFather: `/start`, `/tz`, `/goal`, `/calc`, `/today`, `/undo`, `/stats`, `/remember`, `/model`
 - [ ] (Later) Set the webhook to the API Gateway URL, passing `secret_token=$TELEGRAM_WEBHOOK_SECRET`
 
 ## 2. Anthropic / Claude API
@@ -143,19 +143,24 @@ Fields: spreadsheet_id
         timezone              # IANA name, e.g. "Europe/Stockholm"
         daily_calorie_goal    # integer kcal
         profile (optional)    # {sex, weight_kg, height_cm, age, activity} — kept if goal was computed, for recompute
-        meal_date, meal_no, day_start_row  # atomic per-day meal counter (+ bounded-read hint); daily total is summed from the sheet, not cached
+        model (optional)      # chosen Claude model id (set via /model); falls back to ANTHROPIC_MODEL
         rl_window, rl_count            # per-user rate-limit window (fixed window)
         recent                          # last N messages (conversation buffer)
+# No per-day state here: meal_no and the daily total are both derived from the sheet
+# (the source of truth). meal_no continues a meal if logged within 37 min of the
+# previous entry, else starts the next number.
 ```
 
 ## Commands
 
-`/start` · `/tz` · `/goal` · `/calc` · `/today` · `/undo` · `/stats` · `/remember`
+`/start` · `/tz` · `/goal` · `/calc` · `/today` · `/undo` · `/stats` · `/remember` · `/model`
 
 (`/calc <food>` — alias `/estimate`, or a photo with a `/calc` caption — estimates
-calories without logging anything. `/undo` removes the last logged meal. Intent is also
-inferred from phrasing, so plain language usually works without a command. Bot replies in
-the user's own language automatically — no language setting needed.)
+calories without logging anything. `/undo` removes the last logged meal. `/model` shows
+inline buttons to switch the analysis model (Sonnet 4.6 default, Haiku 4.5 cheapest, Opus
+4.8 most accurate); the choice is stored per user and overrides the `ANTHROPIC_MODEL`
+default. Intent is also inferred from phrasing, so plain language usually works without a
+command. Bot replies in the user's own language automatically — no language setting needed.)
 
 ## Onboarding flow (revised)
 

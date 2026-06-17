@@ -37,7 +37,7 @@ window, and the conversation buffer.
 ```
 PK: user_id (string)
 Fields: spreadsheet_id, timezone, daily_calorie_goal,
-        meal_date, meal_no, day_start_row,              # per-day meal counter + read hint
+        model,                                          # chosen Claude model (set via /model)
         rl_window, rl_count,                            # rate limit
         recent                                          # conversation buffer
 ```
@@ -66,15 +66,19 @@ Each user gets a separate Google Sheet, created automatically on first contact.
 |---------|------|------|------|----------|----------|---------|-----|-------|
 
 - `meal_no` — the sequential number of the meal **within a date** (integer), reset every day.
-  A meal's uniqueness = the `(date, meal_no)` pair.
-- Allocated by an **atomic DynamoDB counter** on the user record (increment, reset on a new
-  day) — not derived from the sheet. So allocating a `meal_no` needs no full-sheet read and is
-  race-safe.
-- The **daily calorie total is not cached** — it is summed from the sheet on every log reply
-  and on `/today`. The sheet is the single source of truth, so manual edits/writes are always
-  reflected and the total can never drift.
-- A single meal may span several rows (one row = one dish/ingredient); all rows of the same
-  meal share the same `meal_no`.
+- **Derived from the sheet** at log time, not from a DynamoDB counter: a new entry continues
+  the current meal (same `meal_no`) if it is logged within **37 minutes** of the previous
+  entry, otherwise it starts the next number. Because it is computed from the sheet, the
+  numbering starts at 1, reuses a number freed by undoing/correcting the last entry, and is
+  never burned by a failed append.
+- The **daily calorie total is not cached** either — it is summed from the sheet on every log
+  reply and on `/today`. The sheet is the single source of truth, so manual edits/writes are
+  always reflected and nothing can drift. There is no per-day state in DynamoDB at all.
+- A single meal may span several rows and several appends; all rows logged within the window
+  share the same `meal_no`.
+- **Undo/correct** operate on the *last entry* (the rows of the most recent append, grouped by
+  a shared `date`+`time` at minute precision), not the whole meal — so undoing removes only the
+  last thing logged even when several entries share a `meal_no`.
 
 ### "Days" sheet (optional)
 Per-day aggregation via Google Sheets formulas — total calories and macros.
@@ -175,21 +179,27 @@ Return the final JSON in the same format (without needs_clarification).
 - Return `200 OK` to Telegram immediately, do the processing before replying
 
 ### Photos
-- Claude auto-resizes to 1568px
-- Optional: resize to 768px before sending to save tokens
+- Claude auto-resizes to 1568px, but the app **downscales the long edge to 768px**
+  (Pillow, re-encoded as JPEG) before sending — ~3x fewer image tokens with negligible
+  impact on calorie estimates. Falls back to the original bytes if an image can't be decoded.
 
 ---
 
 ## Cost (estimate)
 
+Cost is dominated almost entirely by the Claude API; the AWS pieces and Sheets are
+effectively free at this scale. With photos downscaled to 768px, a Sonnet 4.6 photo
+analysis is roughly **$0.008** (≈1600 input + ~200 output tokens) and a text analysis
+~$0.006.
+
 | Component | Cost |
 |---|---|
-| Lambda | free (free tier) |
-| DynamoDB | free (free tier) |
-| API Gateway | free (free tier) |
-| Claude API (~1000 photos/mo) | ~$0.06 |
+| Lambda, DynamoDB, API Gateway | free tier (negligible) |
 | Google Sheets API | free |
-| **Total** | **~$0.06/mo** |
+| Claude API (Sonnet 4.6) | the only real cost — see per-call figures above |
+
+Per **active user**, that works out to roughly **$10–25/year** (light use ~$8–10,
+heavy use ~$40+). Switching the model to Haiku 4.5 cuts the Claude cost ~3x.
 
 ---
 
@@ -199,6 +209,7 @@ Return the final JSON in the same format (without needs_clarification).
 - `python-telegram-bot` or direct calls to the Telegram API
 - `httpx` for the Google Sheets API (instead of the heavy SDK)
 - `anthropic` SDK
+- `Pillow` to downscale photos before sending to Claude
 - `boto3` for DynamoDB
 
 ---

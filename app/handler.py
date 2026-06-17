@@ -26,6 +26,14 @@ logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 _SHEET_URL_RE = re.compile(r"/spreadsheets/d/([a-zA-Z0-9-_]+)")
 _MAX_CLARIFY_ROUNDS = 3  # cap the back-and-forth so it always converges
 
+# Models the user can switch between via /model. Sonnet is the default (see
+# ANTHROPIC_MODEL); the value stored per user overrides it.
+_MODELS = {
+    "sonnet": ("claude-sonnet-4-6", "Sonnet 4.6 — balanced (default)"),
+    "haiku": ("claude-haiku-4-5", "Haiku 4.5 — fastest & cheapest"),
+    "opus": ("claude-opus-4-8", "Opus 4.8 — most accurate, priciest"),
+}
+
 
 def lambda_handler(event, context):
     # Only Telegram should be able to invoke us: it echoes back the secret we
@@ -38,6 +46,14 @@ def lambda_handler(event, context):
 
     update = json.loads(event.get("body") or "{}")
     logger.info("Received Telegram update: %s", update.get("update_id"))
+
+    callback = update.get("callback_query")
+    if callback:
+        try:
+            _handle_callback(callback)
+        except Exception:
+            logger.exception("Callback error")
+        return {"statusCode": 200, "body": "ok"}
 
     message = update.get("message") or {}
     chat_id = (message.get("chat") or {}).get("id")
@@ -90,6 +106,8 @@ def _route_text(chat_id, user_id, text):
         return _today(chat_id, user_id)
     if text.startswith("/undo"):
         return _undo(chat_id, user_id)
+    if text.startswith("/model"):
+        return _choose_model(chat_id, user_id)
 
     link = _SHEET_URL_RE.search(text)
     if link:
@@ -117,7 +135,8 @@ def _route_photo(chat_id, user_id, message):
         caption = _strip_command(caption)
     result = claude.analyze_image(image, caption=caption or None,
                                   known_foods=dynamo.list_foods(user_id),
-                                  recent=dynamo.get_recent(user_id))
+                                  recent=dynamo.get_recent(user_id),
+                                  model=dynamo.get_model(user_id))
     dynamo.push_recent(user_id, "user", caption or "(photo)")
     mode = "estimate" if forced_estimate else _intent_mode(result)
     _process(chat_id, user_id, result, description=caption or "(meal from photo)", mode=mode)
@@ -128,7 +147,8 @@ def _new_meal(chat_id, user_id, description, forced_mode=None):
     if not description:
         return telegram.send_message(chat_id, "Usage: /calc two eggs and toast")
     result = claude.analyze_text(description, known_foods=dynamo.list_foods(user_id),
-                                 recent=dynamo.get_recent(user_id))
+                                 recent=dynamo.get_recent(user_id),
+                                 model=dynamo.get_model(user_id))
     dynamo.push_recent(user_id, "user", description)
     mode = forced_mode or _intent_mode(result)
     _process(chat_id, user_id, result, description=description, mode=mode)
@@ -164,7 +184,8 @@ def _continue_clarify(chat_id, user_id, pending, answer):
     force = len(history) >= _MAX_CLARIFY_ROUNDS
     result = claude.clarify(pending.get("description", ""), history, force_final=force,
                             known_foods=dynamo.list_foods(user_id),
-                            recent=dynamo.get_recent(user_id))
+                            recent=dynamo.get_recent(user_id),
+                            model=dynamo.get_model(user_id))
     dynamo.push_recent(user_id, "user", answer)
 
     if result.get("needs_clarification") and not force:
@@ -192,22 +213,19 @@ def _finalize(chat_id, user_id, result, mode):
         return _reply(chat_id, user_id, "Couldn't identify any food there.")
 
     sid = user["spreadsheet_id"]
-    date, time_str = sheets.now_parts(user.get("timezone", "UTC"))
+    tz = user.get("timezone", "UTC")
+    date, time_str = sheets.now_parts(tz)
 
-    # A correction replaces the previous meal: drop it, then log the fix.
+    # A correction replaces the last entry: drop it, then log the fix.
     if mode == "correct":
         sheets.delete_last_meal(sid)
 
-    meal_no = dynamo.next_meal(user_id, date)
-    written = sheets.append_meal(sid, items, meal_no, date, time_str)
-    start_row = user.get("day_start_row")
-    if meal_no == 1:  # first meal of the day — remember where today's rows begin
-        start_row = sheets.range_start_row(written)
-        if start_row:
-            dynamo.set_day_start_row(user_id, start_row)
-    # The sheet is the source of truth — sum today's total back from it (so manual
-    # edits are reflected) rather than trusting a cached counter.
-    day_total, _ = sheets.day_summary(sid, date, start_row=start_row)
+    # meal_no and the prior day total both come from the sheet (the source of truth):
+    # the number continues the current meal if logged within the hour, else starts a
+    # new one. No per-day counter in DynamoDB to drift.
+    meal_no, prior_total, _ = sheets.day_state(sid, date, tz)
+    sheets.append_meal(sid, items, meal_no, date, time_str)
+    day_total = prior_total + sum(_as_int(it.get("calories")) for it in items)
     label = "Updated" if mode == "correct" else "Logged"
     _reply(chat_id, user_id, _format_logged(result, day_total, user, label))
 
@@ -221,6 +239,13 @@ def _undo(chat_id, user_id):
         return _reply(chat_id, user_id, "Nothing to undo.")
     names = ", ".join(name for name, _ in removed)
     _reply(chat_id, user_id, f"Removed: {names}.")
+
+
+def _as_int(value):
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _reply(chat_id, user_id, text):
@@ -312,7 +337,7 @@ def _remember(chat_id, user_id, text):
 
     name = " ".join(parts)
     try:
-        est = claude.estimate_food(name)
+        est = claude.estimate_food(name, model=dynamo.get_model(user_id))
     except Exception:
         logger.exception("estimate_food failed")
         return telegram.send_message(
@@ -325,7 +350,7 @@ def _remember_photo(chat_id, user_id, name, image):
         return telegram.send_message(
             chat_id, "Send the photo with a caption like: /remember lemon waffles")
     try:
-        est = claude.estimate_food_from_image(image, name)
+        est = claude.estimate_food_from_image(image, name, model=dynamo.get_model(user_id))
     except Exception:
         logger.exception("estimate_food_from_image failed")
         return telegram.send_message(
@@ -345,10 +370,7 @@ def _today(chat_id, user_id):
     if not user:
         return
     date, _ = sheets.now_parts(user.get("timezone", "UTC"))
-    if user.get("meal_date") != date:
-        return telegram.send_message(chat_id, "No meals logged today yet.")
-    total, items = sheets.day_summary(
-        user["spreadsheet_id"], date, start_row=user.get("day_start_row"))
+    total, items = sheets.day_summary(user["spreadsheet_id"], date)
     if not items:
         return telegram.send_message(chat_id, "No meals logged today yet.")
     lines = [f"{name} — {cal} kcal" for name, cal in items]
@@ -358,6 +380,37 @@ def _today(chat_id, user_id):
     else:
         lines.append(f"\nToday: {total} kcal")
     telegram.send_message(chat_id, "\n".join(lines))
+
+
+# ── model selection ───────────────────────────────────────────
+def _choose_model(chat_id, user_id):
+    current = dynamo.get_model(user_id) or claude.default_model()
+    rows = [[(("• " if mid == current else "") + label, f"model:{key}")]
+            for key, (mid, label) in _MODELS.items()]
+    telegram.send_message(
+        chat_id,
+        "Choose the model used to analyze your meals (affects accuracy and cost):",
+        reply_markup=telegram.inline_keyboard(rows))
+
+
+def _handle_callback(callback):
+    data = callback.get("data") or ""
+    cq_id = callback.get("id")
+    chat_id = ((callback.get("message") or {}).get("chat") or {}).get("id")
+    user_id = (callback.get("from") or {}).get("id")
+    choice = _model_choice(data)
+    if choice and chat_id and user_id:
+        dynamo.set_model(user_id, choice[0])
+        telegram.answer_callback_query(cq_id, "Model updated")
+        return telegram.send_message(chat_id, f"Model set to {choice[1]}.")
+    telegram.answer_callback_query(cq_id)
+
+
+def _model_choice(data):
+    """Map an inline-button 'model:<key>' payload to (model_id, label), or None."""
+    if not data.startswith("model:"):
+        return None
+    return _MODELS.get(data.split(":", 1)[1])
 
 
 def _require_onboarded(chat_id, user_id):

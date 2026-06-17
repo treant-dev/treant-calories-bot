@@ -56,6 +56,22 @@ def set_timezone(user_id, tz):
     )
 
 
+def get_model(user_id):
+    """The user's chosen Claude model id, or None to use the default."""
+    user = get_user(user_id)
+    return user.get("model") if user else None
+
+
+def set_model(user_id, model):
+    # "model" is a DynamoDB reserved word, so alias it.
+    _table("USER_PROFILE_TABLE").update_item(
+        Key={"user_id": str(user_id)},
+        UpdateExpression="SET #m = :m",
+        ExpressionAttributeNames={"#m": "model"},
+        ExpressionAttributeValues={":m": model},
+    )
+
+
 # ── conversation buffer (recent messages, capped) ─────────────
 _RECENT_CAP = 6
 
@@ -115,42 +131,6 @@ def list_foods(user_id):
     resp = _table("USER_FOODS_TABLE").query(
         KeyConditionExpression=Key("user_id").eq(str(user_id)))
     return resp.get("Items", [])
-
-
-# ── per-day meal counter (no sheet read, race-safe) ──
-def next_meal(user_id, date):
-    """Allocate this date's next meal_no. Returns meal_no. Atomic +1, resetting
-    when the day rolls over — the same 'last + 1 or reset' logic, kept in DynamoDB
-    instead of the sheet. The daily calorie total is NOT cached here; it is summed
-    from the sheet (the source of truth, so manual edits are always reflected)."""
-    table = _table("USER_PROFILE_TABLE")
-    try:
-        resp = table.update_item(
-            Key={"user_id": str(user_id)},
-            UpdateExpression="ADD meal_no :one",
-            ConditionExpression="meal_date = :d",        # same day → just increment
-            ExpressionAttributeValues={":one": 1, ":d": date},
-            ReturnValues="UPDATED_NEW",
-        )
-    except ClientError as e:
-        if not _is_conditional_failure(e):
-            raise
-        resp = table.update_item(                         # new day / first meal → reset
-            Key={"user_id": str(user_id)},
-            UpdateExpression="SET meal_date = :d, meal_no = :one",
-            ExpressionAttributeValues={":d": date, ":one": 1},
-            ReturnValues="UPDATED_NEW",
-        )
-    return int(resp["Attributes"]["meal_no"])
-
-
-def set_day_start_row(user_id, row):
-    """Remember the sheet row where today's first meal landed (for bounded reads)."""
-    _table("USER_PROFILE_TABLE").update_item(
-        Key={"user_id": str(user_id)},
-        UpdateExpression="SET day_start_row = :r",
-        ExpressionAttributeValues={":r": int(row)},
-    )
 
 
 # ── per-user rate limit (fixed window) ────────────────────────

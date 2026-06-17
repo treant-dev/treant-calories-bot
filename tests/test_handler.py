@@ -19,6 +19,25 @@ def test_intent_mode_passes_known_intents():
         assert handler._intent_mode({"intent": intent}) == intent
 
 
+def test_as_int_is_lenient():
+    assert handler._as_int("105") == 105
+    assert handler._as_int("105.6") == 105
+    assert handler._as_int(None) == 0
+    assert handler._as_int("n/a") == 0
+
+
+def test_model_choice_parses_known_key():
+    mid, label = handler._model_choice("model:haiku")
+    assert mid == "claude-haiku-4-5"
+    assert "Haiku" in label
+
+
+def test_model_choice_rejects_unknown():
+    assert handler._model_choice("model:bogus") is None
+    assert handler._model_choice("noise") is None
+    assert handler._model_choice("") is None
+
+
 def test_strip_command():
     assert handler._strip_command("/calc two eggs") == "two eggs"
     assert handler._strip_command("/calc") == ""

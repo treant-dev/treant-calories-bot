@@ -1,8 +1,7 @@
 """Google Sheets logging via the REST API, authed with the service account."""
 import json
 import os
-import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -17,6 +16,7 @@ _SHEET = "Log"
 _HEADERS = ["meal_no", "date", "time", "item", "amount_g",
             "calories", "protein", "fat", "carbs"]
 _TIMEOUT = 15
+_MEAL_WINDOW = timedelta(minutes=37)  # entries within this gap share a meal_no
 
 _creds = None
 
@@ -93,18 +93,8 @@ def now_parts(tz="UTC"):
     return n.strftime("%Y-%m-%d"), n.strftime("%H:%M")
 
 
-_ROW_RE = re.compile(r"![A-Z]+(\d+)")
-
-
-def range_start_row(a1_range):
-    """First row number of an A1 range like 'Log!A42:I43' → 42 (or None)."""
-    m = _ROW_RE.search(a1_range or "")
-    return int(m.group(1)) if m else None
-
-
 def append_meal(spreadsheet_id, items, meal_no, date, time_str):
     """Append one meal (one row per item). meal_no/date come from the caller — no read.
-    Returns the written A1 range (e.g. 'Log!A42:I43') so the caller can record it.
     If the Log tab was deleted, recreate it and retry once."""
     new_rows = [
         [meal_no, date, time_str, it["name"], it.get("amount_g", ""),
@@ -132,20 +122,41 @@ def _append(spreadsheet_id, rows):
     return resp.json().get("updates", {}).get("updatedRange")
 
 
-def day_summary(spreadsheet_id, date, start_row=None):
-    """Return (total_calories, [(name, calories), ...]) for `date`.
-    Reads only Log!A{start_row}:I when start_row is known; falls back to a full read
-    (and re-filters) if that bounded range doesn't contain the date — e.g. after a
-    manual edit shifted the rows."""
-    rng = f"{_SHEET}!A{int(start_row)}:I" if start_row else f"{_SHEET}!A2:I"
-    r = httpx.get(f"{_BASE}/{spreadsheet_id}/values/{rng}", headers=_hdr(), timeout=_TIMEOUT)
-    r.raise_for_status()
-    rows = r.json().get("values", [])
-    todays = [x for x in rows if len(x) > 5 and x[1] == date]
-    if start_row and not todays:                     # stale pointer → self-heal
-        todays = [x for x in _read_rows(spreadsheet_id) if len(x) > 5 and x[1] == date]
+def day_state(spreadsheet_id, date, tz="UTC"):
+    """One read of today's rows → (next_meal_no, total_calories, items).
+
+    Everything is derived from the sheet (the source of truth): the total is the
+    sum of today's `calories`, `items` is [(name, calories), ...], and next_meal_no
+    continues the last meal if the previous entry was logged within an hour else
+    starts a new one. Computing the number from the sheet means it starts at 1,
+    reuses a number freed by undoing/correcting the last entry, and is never burned
+    by a failed append."""
+    todays = [x for x in _read_rows(spreadsheet_id) if len(x) > 5 and x[1] == date]
     items = [(x[3], _as_int(x[5])) for x in todays]
-    return sum(c for _, c in items), items
+    next_no = _next_meal_no(todays, datetime.now(ZoneInfo(tz)))
+    return next_no, sum(c for _, c in items), items
+
+
+def _next_meal_no(todays, now):
+    """meal_no for a new entry logged at `now`, given today's rows (chronological)."""
+    if not todays:
+        return 1
+    last = todays[-1]
+    last_no = _as_int(last[0])
+    try:
+        last_dt = datetime.strptime(f"{last[1]} {last[2]}", "%Y-%m-%d %H:%M").replace(
+            tzinfo=now.tzinfo)
+        if now - last_dt <= _MEAL_WINDOW:
+            return last_no                  # within the window → same meal
+    except (ValueError, IndexError):
+        pass
+    return last_no + 1
+
+
+def day_summary(spreadsheet_id, date):
+    """Return (total_calories, [(name, calories), ...]) for `date`, summed from the sheet."""
+    _, total, items = day_state(spreadsheet_id, date)
+    return total, items
 
 
 def _log_sheet_id(spreadsheet_id):
@@ -158,15 +169,18 @@ def _log_sheet_id(spreadsheet_id):
     raise RuntimeError("Log sheet not found")
 
 
-def _trailing_meal_count(rows):
-    """How many trailing rows belong to the last logged meal (same meal_no + date)."""
+def _trailing_entry_count(rows):
+    """How many trailing rows belong to the last logged entry — the rows written by
+    the most recent append, identified by a shared (date, time). meal_no can span
+    several appends (a whole meal), so it can't be used here."""
     if not rows:
         return 0
-    last_no = rows[-1][0]
-    last_date = rows[-1][1] if len(rows[-1]) > 1 else None
+    last = rows[-1]
+    last_date = last[1] if len(last) > 1 else None
+    last_time = last[2] if len(last) > 2 else None
     k = 0
     for r in reversed(rows):
-        if r and r[0] == last_no and len(r) > 1 and r[1] == last_date:
+        if len(r) > 2 and r[1] == last_date and r[2] == last_time:
             k += 1
         else:
             break
@@ -174,9 +188,10 @@ def _trailing_meal_count(rows):
 
 
 def delete_last_meal(spreadsheet_id):
-    """Delete the rows of the most recently logged meal. Returns [(name, cal), ...] or None."""
+    """Delete the rows of the most recently logged entry (the last append, grouped by
+    a shared date+time). Returns [(name, cal), ...] or None."""
     rows = _read_rows(spreadsheet_id)
-    k = _trailing_meal_count(rows)
+    k = _trailing_entry_count(rows)
     if not k:
         return None
     n = len(rows)

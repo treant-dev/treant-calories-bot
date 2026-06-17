@@ -30,6 +30,24 @@ def remove_keyboard():
     return {"remove_keyboard": True}
 
 
+def inline_keyboard(rows):
+    """Build an inline keyboard from rows of (text, callback_data) pairs."""
+    return {"inline_keyboard": [
+        [{"text": text, "callback_data": data} for text, data in row] for row in rows]}
+
+
+def answer_callback_query(callback_query_id, text=None):
+    """Acknowledge a tapped inline button so the client stops its loading spinner."""
+    token = get_secret("telegram_bot_token")
+    payload = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text
+    try:
+        httpx.post(f"{_API}/bot{token}/answerCallbackQuery", json=payload, timeout=10)
+    except Exception:
+        pass  # cosmetic — never fail the request over this
+
+
 def send_chat_action(chat_id, action="typing"):
     """Show a status like 'typing…' (best-effort; lasts ~5s or until a reply)."""
     token = get_secret("telegram_bot_token")

@@ -58,6 +58,7 @@ without a command.
 | `/calc <food>` | Estimate calories without logging (alias `/estimate`; also works as a photo caption) |
 | `/today` | Today's logged meals and total vs. goal |
 | `/undo` | Remove the last logged meal |
+| `/model` | Pick the analysis model (Sonnet 4.6 default / Haiku 4.5 cheapest / Opus 4.8 most accurate) via inline buttons |
 | `/remember <name> [kcal protein fat carbs]` | Save a known food (per 100 g); omit numbers to let the bot estimate. Works with a labeled photo too |
 
 ## Project layout
