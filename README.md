@@ -43,6 +43,10 @@ Telegram → API Gateway (throttled) → Lambda
    meal and replies with the daily total and calories remaining.
 3. **Known foods** — recurring items can be remembered (per 100 g) and reused, so
    the bot scales by portion instead of re-estimating.
+4. **Follow-up corrections** — if you add detail right after an entry is logged
+   (a corrected portion, or a photo of the package/label of the same item), the
+   bot recognizes it as a refinement and updates the last entry instead of adding
+   a new one.
 
 Replies mirror the user's own language automatically; intent (log / estimate /
 undo / correct / chat) is inferred from phrasing, so plain language usually works
@@ -59,7 +63,7 @@ without a command.
 | `/today` | Today's totals — calories vs. goal plus summed protein/fat/carbs |
 | `/undo` | Remove the last logged meal |
 | `/model` | Pick the analysis model (Sonnet 4.6 default / Haiku 4.5 cheapest / Opus 4.8 most accurate) via inline buttons |
-| `/remember <name> [kcal protein fat carbs]` | Save a known food (per 100 g); omit numbers to let the bot estimate. Works with a labeled photo too |
+| `/remember <name> [kcal protein fat carbs]` | Save a known food (per 100 g). Omit the numbers and the bot asks for a label photo, the numbers, or an estimate; a photo with a `/remember <name>` caption also works in one shot |
 
 ## Project layout
 

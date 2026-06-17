@@ -113,9 +113,12 @@ def _route_text(chat_id, user_id, text):
     if link:
         return _link_sheet(chat_id, user_id, link.group(1))
 
-    # A reply during an open clarification continues that dialog.
+    # A reply during an open dialog continues it: a /remember in progress, or a
+    # meal clarification.
     pending = dynamo.get_pending(user_id)
     if pending:
+        if pending.get("type") == "remember":
+            return _continue_remember(chat_id, user_id, pending, text)
         return _continue_clarify(chat_id, user_id, pending, text)
 
     _new_meal(chat_id, user_id, text)
@@ -131,6 +134,12 @@ def _route_photo(chat_id, user_id, message):
         return _remember_photo(chat_id, user_id, _strip_command(caption), image)
 
     forced_estimate = caption.startswith(("/calc", "/estimate"))
+    if not forced_estimate:
+        # A photo sent while a /remember is awaiting details = the food's label.
+        pending = dynamo.get_pending(user_id)
+        if pending and pending.get("type") == "remember":
+            dynamo.clear_pending(user_id)
+            return _remember_photo(chat_id, user_id, pending.get("name", ""), image)
     if forced_estimate:
         caption = _strip_command(caption)
     result = claude.analyze_image(image, caption=caption or None,
@@ -329,20 +338,47 @@ def _remember(chat_id, user_id, text):
     if not parts:
         return telegram.send_message(
             chat_id, "Usage: /remember <name> [kcal protein fat carbs]  (per 100 g; "
-                     "omit the numbers and I'll estimate them)")
+                     "omit the numbers to send a photo or have me estimate)")
 
-    if len(parts) >= 5 and all(p.lstrip("-").isdigit() for p in parts[-4:]):
-        *name, cal, prot, fat, carb = parts
-        return _save_food(chat_id, user_id, " ".join(name), cal, prot, fat, carb)
+    parsed = _parse_remember(parts)
+    if parsed:  # name + the four numbers were given inline
+        name, nums = parsed
+        return _save_food(chat_id, user_id, name, *nums)
 
+    # Only a name — open a dialog so the user can send a label photo or the numbers.
     name = " ".join(parts)
+    dynamo.set_pending(user_id, {"type": "remember", "name": name})
+    telegram.send_message(
+        chat_id,
+        f'Saving "{name}". Send a photo of the label, or the numbers '
+        f'(kcal protein fat carbs, per 100 g) — or reply "estimate" and I\'ll guess.')
+
+
+def _continue_remember(chat_id, user_id, pending, text):
+    """A text reply to an open /remember: numbers to save, or anything else → estimate."""
+    dynamo.clear_pending(user_id)
+    name = pending.get("name", "")
+    parsed = _parse_remember(text.split(), fallback_name=name)
+    if parsed:
+        return _save_food(chat_id, user_id, parsed[0], *parsed[1])
     try:
         est = claude.estimate_food(name, model=dynamo.get_model(user_id))
     except Exception:
         logger.exception("estimate_food failed")
         return telegram.send_message(
-            chat_id, "Couldn't estimate that. Try: /remember <name> <kcal> <protein> <fat> <carbs>")
+            chat_id, "Couldn't estimate that. Try: <kcal> <protein> <fat> <carbs> (per 100 g)")
     _save_food(chat_id, user_id, name, est["calories"], est["protein"], est["fat"], est["carbs"])
+
+
+def _parse_remember(tokens, fallback_name=""):
+    """(name, [kcal, protein, fat, carbs]) if the last 4 tokens are integers, else None.
+    Tokens before the numbers form the name; fallback_name is used when only the 4
+    numbers are given (the name is already known from an open dialog)."""
+    if len(tokens) >= 4 and all(t.lstrip("-").isdigit() for t in tokens[-4:]):
+        name = " ".join(tokens[:-4]).strip() or fallback_name
+        if name:
+            return name, tokens[-4:]
+    return None
 
 
 def _remember_photo(chat_id, user_id, name, image):

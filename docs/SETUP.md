@@ -103,6 +103,9 @@ whole list is sent; add filtering/retrieval only if a user's list grows large.
 
 **How items get saved:**
 - `/remember <name> <kcal> <protein> <fat> <carbs>` — explicit, values per 100 g.
+- `/remember <name>` (no numbers) — opens a short dialog (state held in `user_states`):
+  the user can reply with a label **photo**, the numbers, or "estimate" to have Claude guess.
+- A photo with a `/remember <name>` caption — reads the nutrition label in one shot.
 - Auto-offer after a clarification: once the user has supplied the missing detail, the bot
   offers to save the resolved item as a known food.
 

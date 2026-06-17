@@ -41,7 +41,8 @@ def analyze_image(image_bytes, media_type="image/jpeg", caption=None,
     """Analyze a food photo (optionally with the user's caption)."""
     content = [
         _image_block(image_bytes, media_type),
-        {"type": "text", "text": caption or "Analyze the food in this photo."},
+        {"type": "text", "text": caption
+         or "Food photo — could be a new meal or more detail on the last one."},
     ]
     return _ask(content, known_foods, recent, model)
 

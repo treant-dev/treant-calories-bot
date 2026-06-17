@@ -33,9 +33,14 @@ Set intent from how the user phrases it:
   fix the item if they want.
 - "undo" — they want to remove/cancel the last logged entry without giving a replacement
   ("delete that", "remove the last one", "undo", "that was a mistake"). Leave items empty.
-- "correct" — they are fixing the last logged meal with corrected details ("it was 200g not
-  110g", "actually that was with milk"). Return items/total for the corrected WHOLE meal (use
-  the recent conversation for the original); needs_clarification may apply as for a log.
+- "correct" — they are refining the LAST logged meal rather than adding a new one. This
+  covers both an explicit fix ("it was 200g not 110g", "actually that was with milk") AND
+  follow-up detail sent right after you logged something — a clearer photo, or the product
+  package / nutrition label of the SAME item you just logged. Use the recent conversation to
+  recover the original meal and return items/total for the corrected WHOLE meal. Pick
+  "correct" only when the new info clearly refines the same item; if it is a different food,
+  use "log" (a new entry). If it is genuinely unclear whether this updates the last meal or
+  is a new one, set needs_clarification and ask.
 
 Set needs_clarification = true when a missing detail strongly changes the estimate:
 - portion size is unknown and matters

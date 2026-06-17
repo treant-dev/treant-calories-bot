@@ -38,6 +38,27 @@ def test_model_choice_rejects_unknown():
     assert handler._model_choice("") is None
 
 
+def test_parse_remember_name_and_numbers():
+    name, nums = handler._parse_remember("lemon waffles 380 5 14 60".split())
+    assert name == "lemon waffles"
+    assert nums == ["380", "5", "14", "60"]
+
+
+def test_parse_remember_numbers_only_uses_fallback_name():
+    name, nums = handler._parse_remember("380 5 14 60".split(), fallback_name="waffles")
+    assert name == "waffles"
+    assert nums == ["380", "5", "14", "60"]
+
+
+def test_parse_remember_numbers_only_without_name_is_none():
+    assert handler._parse_remember("380 5 14 60".split()) is None
+
+
+def test_parse_remember_no_numbers_is_none():
+    assert handler._parse_remember("lemon waffles".split()) is None
+    assert handler._parse_remember("estimate".split(), fallback_name="x") is None
+
+
 def test_strip_command():
     assert handler._strip_command("/calc two eggs") == "two eggs"
     assert handler._strip_command("/calc") == ""
