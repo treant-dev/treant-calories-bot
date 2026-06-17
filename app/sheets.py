@@ -153,10 +153,21 @@ def _next_meal_no(todays, now):
     return last_no + 1
 
 
-def day_summary(spreadsheet_id, date):
-    """Return (total_calories, [(name, calories), ...]) for `date`, summed from the sheet."""
-    _, total, items = day_state(spreadsheet_id, date)
-    return total, items
+def _col(row, i):
+    """Safe integer read of column `i` (rows may be short when trailing cells are blank)."""
+    return _as_int(row[i]) if len(row) > i else 0
+
+
+def day_totals(spreadsheet_id, date):
+    """Return ({calories, protein, fat, carbs}, row_count) summed over `date`."""
+    todays = [x for x in _read_rows(spreadsheet_id) if len(x) > 5 and x[1] == date]
+    totals = {
+        "calories": sum(_col(x, 5) for x in todays),
+        "protein": sum(_col(x, 6) for x in todays),
+        "fat": sum(_col(x, 7) for x in todays),
+        "carbs": sum(_col(x, 8) for x in todays),
+    }
+    return totals, len(todays)
 
 
 def _log_sheet_id(spreadsheet_id):

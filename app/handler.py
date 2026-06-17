@@ -370,16 +370,15 @@ def _today(chat_id, user_id):
     if not user:
         return
     date, _ = sheets.now_parts(user.get("timezone", "UTC"))
-    total, items = sheets.day_summary(user["spreadsheet_id"], date)
-    if not items:
+    totals, n = sheets.day_totals(user["spreadsheet_id"], date)
+    if not n:
         return telegram.send_message(chat_id, "No meals logged today yet.")
-    lines = [f"{name} — {cal} kcal" for name, cal in items]
+    cal = totals["calories"]
     goal = user.get("daily_calorie_goal")
-    if goal:
-        lines.append(f"\nToday: {total} / {int(goal)} kcal · {int(goal) - total} left")
-    else:
-        lines.append(f"\nToday: {total} kcal")
-    telegram.send_message(chat_id, "\n".join(lines))
+    head = (f"Today: {cal} / {int(goal)} kcal · {int(goal) - cal} left" if goal
+            else f"Today: {cal} kcal")
+    macros = f"P{totals['protein']} F{totals['fat']} C{totals['carbs']}"
+    telegram.send_message(chat_id, f"{head}\n{macros}")
 
 
 # ── model selection ───────────────────────────────────────────
@@ -457,5 +456,5 @@ def _format_logged(result, day_total, user, label="Logged"):
 def _format_estimate(result):
     if not result.get("items"):
         return "Couldn't estimate that."
-    return "\n".join(["Estimate (not logged):", *_item_lines(result),
-                      _total_line(result, "Total")])
+    # No "not logged" header — a logged reply is recognizable by its Logged/Today lines.
+    return "\n".join([*_item_lines(result), _total_line(result, "Total")])

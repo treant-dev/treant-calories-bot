@@ -63,10 +63,11 @@ def test_format_logged_correct_label():
     assert "Updated: 105 kcal" in out
 
 
-def test_format_estimate_marks_not_logged():
+def test_format_estimate_shows_items_and_total():
     out = handler._format_estimate(RESULT)
-    assert out.startswith("Estimate (not logged):")
+    assert "Banana — 105 kcal (P1 F0 C27)" in out
     assert "Total: 105 kcal" in out
+    assert "not logged" not in out  # header dropped — Logged/Today lines distinguish a save
 
 
 def test_format_estimate_handles_empty():

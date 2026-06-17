@@ -39,6 +39,18 @@ def test_trailing_entry_count_splits_same_meal_different_time():
     assert sheets._trailing_entry_count(rows) == 1
 
 
+def test_day_totals_sums_kbju_for_date(monkeypatch):
+    rows = [
+        ["1", "2026-06-17", "09:00", "Oatmeal", "200", "290", "9", "7", "48"],
+        ["1", "2026-06-17", "09:00", "Coffee", "150", "45", "2", "2"],   # carbs cell blank → short row
+        ["2", "2026-06-16", "20:00", "Dinner", "300", "500", "20", "20", "50"],  # other day, excluded
+    ]
+    monkeypatch.setattr(sheets, "_read_rows", lambda sid: rows)
+    totals, n = sheets.day_totals("sheet", "2026-06-17")
+    assert n == 2
+    assert totals == {"calories": 335, "protein": 11, "fat": 9, "carbs": 48}
+
+
 def test_next_meal_no_first_of_day():
     assert sheets._next_meal_no([], _now(8, 0)) == 1
 
