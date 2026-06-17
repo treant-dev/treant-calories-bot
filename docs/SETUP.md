@@ -143,7 +143,7 @@ Fields: spreadsheet_id
         timezone              # IANA name, e.g. "Europe/Stockholm"
         daily_calorie_goal    # integer kcal
         profile (optional)    # {sex, weight_kg, height_cm, age, activity} — kept if goal was computed, for recompute
-        meal_date, meal_no, day_kcal   # atomic per-day meal counter + running daily total
+        meal_date, meal_no, day_start_row  # atomic per-day meal counter (+ bounded-read hint); daily total is summed from the sheet, not cached
         rl_window, rl_count            # per-user rate-limit window (fixed window)
         recent                          # last N messages (conversation buffer)
 ```

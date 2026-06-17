@@ -25,13 +25,6 @@ def test_strip_command():
     assert handler._strip_command("/remember  borscht ") == "borscht"
 
 
-def test_as_int_is_lenient():
-    assert handler._as_int("105") == 105
-    assert handler._as_int("105.6") == 105
-    assert handler._as_int(None) == 0
-    assert handler._as_int("n/a") == 0
-
-
 def test_format_logged_with_goal_shows_remaining():
     user = {"daily_calorie_goal": 2000}
     out = handler._format_logged(RESULT, day_total=105, user=user)

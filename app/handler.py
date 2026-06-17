@@ -194,19 +194,20 @@ def _finalize(chat_id, user_id, result, mode):
     sid = user["spreadsheet_id"]
     date, time_str = sheets.now_parts(user.get("timezone", "UTC"))
 
-    # A correction replaces the previous meal: drop it (and its calories), then log the fix.
+    # A correction replaces the previous meal: drop it, then log the fix.
     if mode == "correct":
-        removed = sheets.delete_last_meal(sid)
-        if removed:
-            dynamo.adjust_day_kcal(user_id, date, -sum(c for _, c in removed))
+        sheets.delete_last_meal(sid)
 
-    meal_kcal = sum(_as_int(it.get("calories")) for it in items)
-    meal_no, day_total = dynamo.next_meal(user_id, date, meal_kcal)
+    meal_no = dynamo.next_meal(user_id, date)
     written = sheets.append_meal(sid, items, meal_no, date, time_str)
+    start_row = user.get("day_start_row")
     if meal_no == 1:  # first meal of the day — remember where today's rows begin
-        start = sheets.range_start_row(written)
-        if start:
-            dynamo.set_day_start_row(user_id, start)
+        start_row = sheets.range_start_row(written)
+        if start_row:
+            dynamo.set_day_start_row(user_id, start_row)
+    # The sheet is the source of truth — sum today's total back from it (so manual
+    # edits are reflected) rather than trusting a cached counter.
+    day_total, _ = sheets.day_summary(sid, date, start_row=start_row)
     label = "Updated" if mode == "correct" else "Logged"
     _reply(chat_id, user_id, _format_logged(result, day_total, user, label))
 
@@ -218,17 +219,8 @@ def _undo(chat_id, user_id):
     removed = sheets.delete_last_meal(user["spreadsheet_id"])
     if not removed:
         return _reply(chat_id, user_id, "Nothing to undo.")
-    date, _ = sheets.now_parts(user.get("timezone", "UTC"))
-    dynamo.adjust_day_kcal(user_id, date, -sum(c for _, c in removed))
     names = ", ".join(name for name, _ in removed)
     _reply(chat_id, user_id, f"Removed: {names}.")
-
-
-def _as_int(value):
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return 0
 
 
 def _reply(chat_id, user_id, text):
@@ -359,7 +351,6 @@ def _today(chat_id, user_id):
         user["spreadsheet_id"], date, start_row=user.get("day_start_row"))
     if not items:
         return telegram.send_message(chat_id, "No meals logged today yet.")
-    dynamo.set_day_kcal(user_id, date, total)  # the sheet is truth — reconcile the counter
     lines = [f"{name} — {cal} kcal" for name, cal in items]
     goal = user.get("daily_calorie_goal")
     if goal:

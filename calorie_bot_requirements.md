@@ -37,7 +37,7 @@ window, and the conversation buffer.
 ```
 PK: user_id (string)
 Fields: spreadsheet_id, timezone, daily_calorie_goal,
-        meal_date, meal_no, day_kcal, day_start_row,   # per-day counters
+        meal_date, meal_no, day_start_row,              # per-day meal counter + read hint
         rl_window, rl_count,                            # rate limit
         recent                                          # conversation buffer
 ```
@@ -68,9 +68,11 @@ Each user gets a separate Google Sheet, created automatically on first contact.
 - `meal_no` — the sequential number of the meal **within a date** (integer), reset every day.
   A meal's uniqueness = the `(date, meal_no)` pair.
 - Allocated by an **atomic DynamoDB counter** on the user record (increment, reset on a new
-  day) — not derived from the sheet. So logging needs no full-sheet read and is race-safe.
-  The running daily total is kept the same way; the sheet stays the source of truth for
-  `/today` and `/stats`.
+  day) — not derived from the sheet. So allocating a `meal_no` needs no full-sheet read and is
+  race-safe.
+- The **daily calorie total is not cached** — it is summed from the sheet on every log reply
+  and on `/today`. The sheet is the single source of truth, so manual edits/writes are always
+  reflected and the total can never drift.
 - A single meal may span several rows (one row = one dish/ingredient); all rows of the same
   meal share the same `meal_no`.
 

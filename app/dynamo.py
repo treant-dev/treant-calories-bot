@@ -117,18 +117,19 @@ def list_foods(user_id):
     return resp.get("Items", [])
 
 
-# ── per-day meal counter + running total (no sheet read, race-safe) ──
-def next_meal(user_id, date, calories):
-    """Allocate this date's next meal_no and add to the running day total.
-    Returns (meal_no, day_total). Atomic +1, resetting when the day rolls over —
-    the same 'last + 1 or reset' logic, kept in DynamoDB instead of the sheet."""
+# ── per-day meal counter (no sheet read, race-safe) ──
+def next_meal(user_id, date):
+    """Allocate this date's next meal_no. Returns meal_no. Atomic +1, resetting
+    when the day rolls over — the same 'last + 1 or reset' logic, kept in DynamoDB
+    instead of the sheet. The daily calorie total is NOT cached here; it is summed
+    from the sheet (the source of truth, so manual edits are always reflected)."""
     table = _table("USER_PROFILE_TABLE")
     try:
         resp = table.update_item(
             Key={"user_id": str(user_id)},
-            UpdateExpression="ADD meal_no :one, day_kcal :c",
+            UpdateExpression="ADD meal_no :one",
             ConditionExpression="meal_date = :d",        # same day → just increment
-            ExpressionAttributeValues={":one": 1, ":c": int(calories), ":d": date},
+            ExpressionAttributeValues={":one": 1, ":d": date},
             ReturnValues="UPDATED_NEW",
         )
     except ClientError as e:
@@ -136,12 +137,11 @@ def next_meal(user_id, date, calories):
             raise
         resp = table.update_item(                         # new day / first meal → reset
             Key={"user_id": str(user_id)},
-            UpdateExpression="SET meal_date = :d, meal_no = :one, day_kcal = :c",
-            ExpressionAttributeValues={":d": date, ":one": 1, ":c": int(calories)},
+            UpdateExpression="SET meal_date = :d, meal_no = :one",
+            ExpressionAttributeValues={":d": date, ":one": 1},
             ReturnValues="UPDATED_NEW",
         )
-    attrs = resp["Attributes"]
-    return int(attrs["meal_no"]), int(attrs["day_kcal"])
+    return int(resp["Attributes"]["meal_no"])
 
 
 def set_day_start_row(user_id, row):
@@ -151,34 +151,6 @@ def set_day_start_row(user_id, row):
         UpdateExpression="SET day_start_row = :r",
         ExpressionAttributeValues={":r": int(row)},
     )
-
-
-def adjust_day_kcal(user_id, date, delta):
-    """Add delta (e.g. negative on undo) to today's running total; no-op on a stale day."""
-    try:
-        _table("USER_PROFILE_TABLE").update_item(
-            Key={"user_id": str(user_id)},
-            UpdateExpression="ADD day_kcal :delta",
-            ConditionExpression="meal_date = :d",
-            ExpressionAttributeValues={":delta": int(delta), ":d": date},
-        )
-    except ClientError as e:
-        if not _is_conditional_failure(e):
-            raise
-
-
-def set_day_kcal(user_id, date, total):
-    """Reconcile today's running total to a known value (the sheet sum); no-op on a stale day."""
-    try:
-        _table("USER_PROFILE_TABLE").update_item(
-            Key={"user_id": str(user_id)},
-            UpdateExpression="SET day_kcal = :t",
-            ConditionExpression="meal_date = :d",
-            ExpressionAttributeValues={":t": int(total), ":d": date},
-        )
-    except ClientError as e:
-        if not _is_conditional_failure(e):
-            raise
 
 
 # ── per-user rate limit (fixed window) ────────────────────────
